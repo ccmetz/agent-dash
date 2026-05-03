@@ -2,7 +2,10 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "test": "vitest run",
-    "build": "vite build"
+    "build": "vite build",
+    "lint": "oxlint",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
   },
   "dependencies": {
     "@tailwindcss/vite": "latest",
@@ -14,6 +17,8 @@
   "devDependencies": {
     "@testing-library/vue": "latest",
     "jsdom": "latest",
+    "oxfmt": "^0.47.0",
+    "oxlint": "^1.62.0",
     "vitest": "latest"
   }
 }
