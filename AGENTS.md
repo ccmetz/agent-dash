@@ -11,3 +11,7 @@ Triage labels use the default mattpocock/skills vocabulary. See `docs/agents/tri
 ### Domain docs
 
 This is a single-context repo. See `docs/agents/domain.md`.
+
+### JavaScript package manager
+
+Use `pnpm` for all JavaScript dependency and script commands. Do not use `npm` or `npx` in this repo.

@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green \"go -C backend run ./cmd/agent-dash\" \"pnpm --dir frontend dev\"",
+    "test": "go -C backend test ./... && pnpm --dir frontend test"
+  },
+  "devDependencies": {
+    "concurrently": "latest"
+  }
+}
