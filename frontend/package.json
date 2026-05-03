@@ -3,22 +3,27 @@
     "dev": "vite --host 127.0.0.1",
     "test": "vitest run",
     "build": "vite build",
+    "typecheck": "vue-tsc --noEmit",
     "lint": "oxlint",
     "format": "oxfmt",
     "format:check": "oxfmt --check"
   },
   "dependencies": {
-    "@tailwindcss/vite": "latest",
-    "@vitejs/plugin-vue": "latest",
-    "tailwindcss": "latest",
-    "vite": "latest",
-    "vue": "latest"
+    "@tailwindcss/vite": "^4.2.4",
+    "@vitejs/plugin-vue": "^6.0.6",
+    "tailwindcss": "^4.2.4",
+    "vite": "^8.0.10",
+    "vue": "^3.5.33"
   },
   "devDependencies": {
-    "@testing-library/vue": "latest",
-    "jsdom": "latest",
+    "@testing-library/vue": "^8.1.0",
+    "@types/node": "^25.6.0",
+    "jsdom": "^29.1.1",
     "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",
-    "vitest": "latest"
+    "type-fest": "^3.13.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5",
+    "vue-tsc": "^3.2.7"
   }
 }

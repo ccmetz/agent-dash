@@ -4,6 +4,6 @@
     "test": "go -C backend test ./... && pnpm --dir frontend test"
   },
   "devDependencies": {
-    "concurrently": "latest"
+    "concurrently": "^9.2.1"
   }
 }
