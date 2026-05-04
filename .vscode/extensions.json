@@ -2,6 +2,7 @@
   "recommendations": [
     "Vue.volar",
     "oxc.oxc-vscode",
-    "bradlc.vscode-tailwindcss"
+    "bradlc.vscode-tailwindcss",
+    "golang.go"
   ]
 }
