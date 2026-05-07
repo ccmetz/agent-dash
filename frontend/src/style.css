@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-app-fg: #e5edf7;
+  --color-app-fg-strong: #f8fbff;
+  --color-app-muted: #b7c8dc;
+  --color-app-accent: #8fb5e3;
+
+  --color-app-shell-glow: #24446a;
+  --color-app-shell: #101722;
+  --color-app-shell-deep: #080b10;
+
+  --color-panel: rgb(255 255 255 / 8%);
+  --color-panel-border: rgb(255 255 255 / 15%);
+
+  --color-status-success: #78f0aa;
+  --color-status-success-fg: #062113;
+  --color-status-danger: #ff8f8f;
+  --color-status-danger-fg: #2c0707;
+  --color-status-neutral: #bdd1e8;
+  --color-status-neutral-fg: #0d1724;
+
+  --shadow-panel: 0 24px 70px rgb(0 0 0 / 35%);
+  --radius-panel: 1.25rem;
+}
+
+@utility bg-app-shell {
+  background: radial-gradient(
+    circle at top left,
+    var(--color-app-shell-glow),
+    var(--color-app-shell) 45%,
+    var(--color-app-shell-deep)
+  );
+}

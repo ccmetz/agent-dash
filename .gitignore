@@ -1,0 +1,5 @@
+backend/config/local.json
+backend/data/
+node_modules/
+frontend/node_modules/
+frontend/dist/

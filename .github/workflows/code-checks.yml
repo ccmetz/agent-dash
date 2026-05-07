@@ -1,0 +1,56 @@
+name: Code Checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile
+
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l backend)"
+
+      - name: Test backend
+        run: go -C backend test ./...
+
+      - name: Check frontend formatting
+        run: pnpm --dir frontend format:check
+
+      - name: Lint frontend
+        run: pnpm --dir frontend lint
+
+      - name: Typecheck frontend
+        run: pnpm --dir frontend typecheck
+
+      - name: Test frontend
+        run: pnpm --dir frontend test
+
+      - name: Build frontend
+        run: pnpm --dir frontend build
