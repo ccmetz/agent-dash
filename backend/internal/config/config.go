@@ -8,11 +8,20 @@ import (
 )
 
 type Config struct {
-	AnalyticsStorePath string `json:"analyticsStorePath"`
+	AnalyticsStorePath   string `json:"analyticsStorePath"`
+	OpenCodeDatabasePath string `json:"openCodeDatabasePath"`
 }
 
 func Default() Config {
-	return Config{AnalyticsStorePath: filepath.Join("data", "agent-dash.sqlite")}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+
+	return Config{
+		AnalyticsStorePath:   filepath.Join("data", "agent-dash.sqlite"),
+		OpenCodeDatabasePath: filepath.Join(homeDir, ".local", "share", "opencode", "opencode.db"),
+	}
 }
 
 func Load() (Config, error) {

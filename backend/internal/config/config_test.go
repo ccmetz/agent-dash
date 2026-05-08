@@ -17,11 +17,15 @@ func TestLoadUsesBuiltInDefaultsWhenLocalConfigIsMissing(t *testing.T) {
 	if config.AnalyticsStorePath != filepath.Join("data", "agent-dash.sqlite") {
 		t.Fatalf("expected default Analytics Store path, got %q", config.AnalyticsStorePath)
 	}
+	expectedOpenCodePath := filepath.Join(mustHomeDir(t), ".local", "share", "opencode", "opencode.db")
+	if config.OpenCodeDatabasePath != expectedOpenCodePath {
+		t.Fatalf("expected default OpenCode database path, got %q", config.OpenCodeDatabasePath)
+	}
 }
 
 func TestLoadUsesValuesFromJSONConfigFile(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "local.json")
-	if err := os.WriteFile(configPath, []byte(`{"analyticsStorePath":"custom/analytics.sqlite"}`), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(`{"analyticsStorePath":"custom/analytics.sqlite","openCodeDatabasePath":"custom/opencode.sqlite"}`), 0o600); err != nil {
 		t.Fatalf("failed to write config file: %v", err)
 	}
 	t.Setenv("AGENT_DASH_CONFIG", configPath)
@@ -33,6 +37,9 @@ func TestLoadUsesValuesFromJSONConfigFile(t *testing.T) {
 
 	if config.AnalyticsStorePath != "custom/analytics.sqlite" {
 		t.Fatalf("expected configured Analytics Store path, got %q", config.AnalyticsStorePath)
+	}
+	if config.OpenCodeDatabasePath != "custom/opencode.sqlite" {
+		t.Fatalf("expected configured OpenCode database path, got %q", config.OpenCodeDatabasePath)
 	}
 }
 
@@ -46,4 +53,14 @@ func TestLoadReturnsErrorForInvalidJSONConfig(t *testing.T) {
 	if _, err := Load(); err == nil {
 		t.Fatalf("expected invalid config JSON to return an error")
 	}
+}
+
+func mustHomeDir(t *testing.T) string {
+	t.Helper()
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("expected home directory: %v", err)
+	}
+	return homeDir
 }
