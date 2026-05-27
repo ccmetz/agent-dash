@@ -122,10 +122,11 @@ const upsertModelCallSQL = `
 		reasoning_tokens,
 		cache_read_tokens,
 		cache_write_tokens,
+		total_tokens,
 		actual_cost,
 		source_created_at,
 		source_updated_at
-	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	on conflict(source, source_id) do update set
 		session_source_id = excluded.session_source_id,
 		provider = excluded.provider,
@@ -136,6 +137,7 @@ const upsertModelCallSQL = `
 		reasoning_tokens = excluded.reasoning_tokens,
 		cache_read_tokens = excluded.cache_read_tokens,
 		cache_write_tokens = excluded.cache_write_tokens,
+		total_tokens = excluded.total_tokens,
 		actual_cost = excluded.actual_cost,
 		source_created_at = excluded.source_created_at,
 		source_updated_at = excluded.source_updated_at
@@ -316,6 +318,7 @@ func ensureAnalyticsStore(ctx context.Context, db *sql.DB) error {
 			reasoning_tokens integer not null,
 			cache_read_tokens integer not null,
 			cache_write_tokens integer not null,
+			total_tokens integer,
 			actual_cost real not null,
 			source_created_at text not null,
 			source_updated_at text not null,
@@ -337,7 +340,22 @@ func ensureAnalyticsStore(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
+	if err := ensureColumn(ctx, db, "model_calls", "total_tokens", "integer"); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ensureColumn(ctx context.Context, db *sql.DB, table, column, columnType string) error {
+	columns, err := tableColumns(ctx, db, table)
+	if err != nil {
+		return err
+	}
+	if columns[column] {
+		return nil
+	}
+	_, err = db.ExecContext(ctx, `alter table `+table+` add column `+column+` `+columnType)
+	return err
 }
 
 func syncProjects(ctx context.Context, source, store *sql.DB, result *SyncResult) (int, error) {
@@ -420,6 +438,7 @@ type messageData struct {
 		Input     int `json:"input"`
 		Output    int `json:"output"`
 		Reasoning int `json:"reasoning"`
+		Total     int `json:"total"`
 		Cache     struct {
 			Read  int `json:"read"`
 			Write int `json:"write"`
@@ -465,6 +484,7 @@ func syncModelCalls(ctx context.Context, source, store *sql.DB, result *SyncResu
 			message.Tokens.Reasoning,
 			message.Tokens.Cache.Read,
 			message.Tokens.Cache.Write,
+			nullableTotalTokens(message),
 			message.Cost,
 			fmt.Sprint(created),
 			fmt.Sprint(updated),
@@ -474,6 +494,13 @@ func syncModelCalls(ctx context.Context, source, store *sql.DB, result *SyncResu
 		count++
 	}
 	return count, rows.Err()
+}
+
+func nullableTotalTokens(message messageData) sql.NullInt64 {
+	if message.Tokens.Total == 0 {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(message.Tokens.Total), Valid: true}
 }
 
 func trackChange(ctx context.Context, store *sql.DB, result *SyncResult, table, sourceID, sourceUpdatedAt string) {

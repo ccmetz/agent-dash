@@ -230,6 +230,72 @@ func TestManualUsageSyncEndpointSyncsOpenCodeUsageAndStatusShowsLastRun(t *testi
 	}
 }
 
+func TestUsageOverviewReturnsLastThirtyDaysTotalsAndDailyBuckets(t *testing.T) {
+	dir := t.TempDir()
+	usageSourcePath := filepath.Join(dir, "opencode.db")
+	storePath := filepath.Join(dir, "analytics.db")
+	createSupportedOpenCodeDatabase(t, usageSourcePath)
+	db := openSQLite(t, usageSourcePath)
+	execSQL(t, db, `insert into project (id, worktree, name, time_created, time_updated) values ('proj_1', '/work/agent-dash', 'Agent Dash', 1704067200000, 1704067200000)`)
+	execSQL(t, db, `insert into session (id, project_id, title, time_created, time_updated, time_archived) values ('ses_1', 'proj_1', 'January work', 1704067200000, 1704067200000, null)`)
+	execSQL(t, db, `insert into session (id, project_id, title, time_created, time_updated, time_archived) values ('ses_2', 'proj_1', 'February work', 1706745600000, 1706745600000, null)`)
+	execSQL(t, db, `insert into message (id, session_id, time_created, time_updated, data) values ('msg_1', 'ses_1', 1704067200000, 1704067200000, '{"role":"assistant","modelID":"claude-opus-4-5","providerID":"opencode","cost":0.25,"tokens":{"input":10,"output":20,"reasoning":3,"total":40,"cache":{"read":4,"write":5}},"finish":"stop"}')`)
+	execSQL(t, db, `insert into message (id, session_id, time_created, time_updated, data) values ('msg_2', 'ses_2', 1706745600000, 1706745600000, '{"role":"assistant","modelID":"claude-opus-4-5","providerID":"opencode","cost":0.75,"tokens":{"input":30,"output":40,"reasoning":5,"total":90,"cache":{"read":6,"write":7}},"finish":"stop"}')`)
+	db.Close()
+	configPath := filepath.Join(dir, "local.json")
+	if err := os.WriteFile(configPath, []byte(`{"openCodeDatabasePath":"`+usageSourcePath+`","analyticsStorePath":"`+storePath+`"}`), 0o600); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+	t.Setenv("AGENT_DASH_CONFIG", configPath)
+
+	syncRequest := httptest.NewRequest(http.MethodPost, "/api/usage-sync", nil)
+	syncResponse := httptest.NewRecorder()
+	NewServer().ServeHTTP(syncResponse, syncRequest)
+	if syncResponse.Code != http.StatusOK {
+		t.Fatalf("expected sync status 200, got %d", syncResponse.Code)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/usage-overview?days=30&end=2024-02-01T00:00:00Z", nil)
+	response := httptest.NewRecorder()
+	NewServer().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected overview status 200, got %d", response.Code)
+	}
+	var body struct {
+		Range struct {
+			Days int `json:"days"`
+		} `json:"range"`
+		Totals struct {
+			Tokens struct {
+				Total      int `json:"total"`
+				Input      int `json:"input"`
+				Output     int `json:"output"`
+				Reasoning  int `json:"reasoning"`
+				CacheRead  int `json:"cacheRead"`
+				CacheWrite int `json:"cacheWrite"`
+			} `json:"tokens"`
+			ActualCost    float64 `json:"actualCost"`
+			AgentSessions int     `json:"agentSessions"`
+			ModelCalls    int     `json:"modelCalls"`
+		} `json:"totals"`
+		Daily []struct {
+			Date       string  `json:"date"`
+			Tokens     int     `json:"tokens"`
+			ActualCost float64 `json:"actualCost"`
+		} `json:"daily"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("expected overview JSON response: %v", err)
+	}
+	if body.Range.Days != 30 || body.Totals.Tokens.Total != 90 || body.Totals.Tokens.Input != 30 || body.Totals.Tokens.Output != 40 || body.Totals.Tokens.Reasoning != 5 || body.Totals.Tokens.CacheRead != 6 || body.Totals.Tokens.CacheWrite != 7 || body.Totals.ActualCost != 0.75 || body.Totals.AgentSessions != 1 || body.Totals.ModelCalls != 1 {
+		t.Fatalf("expected overview totals for last 30 days, got %+v", body.Totals)
+	}
+	if len(body.Daily) != 1 || body.Daily[0].Date != "2024-02-01" || body.Daily[0].Tokens != 90 || body.Daily[0].ActualCost != 0.75 {
+		t.Fatalf("expected daily bucket for included Model Call, got %+v", body.Daily)
+	}
+}
+
 func createSupportedOpenCodeDatabase(t *testing.T, path string) {
 	t.Helper()
 	db := openSQLite(t, path)
