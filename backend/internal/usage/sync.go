@@ -4,22 +4,40 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 const openCodeSource = "opencode"
 
-var requiredOpenCodeSchema = map[string][]string{
-	"project": {"id", "worktree", "name", "time_created", "time_updated"},
-	"session": {"id", "project_id", "title", "time_created", "time_updated", "time_archived"},
-	"message": {"id", "session_id", "time_created", "time_updated", "data"},
+var requiredOpenCodeSchema = []struct {
+	table   string
+	columns []string
+}{
+	{"project", []string{"id", "worktree", "name", "time_created", "time_updated"}},
+	{"session", []string{"id", "project_id", "title", "time_created", "time_updated", "time_archived"}},
+	{"message", []string{"id", "session_id", "time_created", "time_updated", "data"}},
 }
 
 type UnsupportedOpenCodeSchemaError struct {
 	Missing string
+}
+
+type SyncResult struct {
+	Status       string `json:"status"`
+	StartedAt    string `json:"startedAt"`
+	FinishedAt   string `json:"finishedAt"`
+	Inserted     int    `json:"inserted"`
+	Updated      int    `json:"updated"`
+	Skipped      int    `json:"skipped"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
 func (err UnsupportedOpenCodeSchemaError) Error() string {
@@ -123,62 +141,121 @@ const upsertModelCallSQL = `
 		source_updated_at = excluded.source_updated_at
 `
 
-func SyncOpenCode(ctx context.Context, sourcePath, storePath string) error {
+func SyncOpenCode(ctx context.Context, sourcePath, storePath string) (result SyncResult, err error) {
+	result = SyncResult{Status: "success", StartedAt: time.Now().UTC().Format(time.RFC3339)}
 	log.Printf("starting OpenCode Usage Sync source=%q analytics_store=%q", sourcePath, storePath)
 
 	source, err := sql.Open("sqlite", sourcePath)
 	if err != nil {
-		return err
+		result.Status = "error"
+		result.ErrorMessage = sanitizeSyncError(err)
+		return result, err
 	}
 	defer source.Close()
 
-	store, err := sql.Open("sqlite", storePath)
+	store, err := openAnalyticsStore(storePath)
 	if err != nil {
-		return err
+		result.Status = "error"
+		result.ErrorMessage = sanitizeSyncError(err)
+		return result, err
 	}
 	defer store.Close()
+	_ = ensureAnalyticsStore(ctx, store)
+	defer func() {
+		result.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+		recordSyncRun(ctx, store, &result)
+	}()
 
 	if err := ValidateOpenCodeSchema(ctx, source); err != nil {
 		log.Printf("OpenCode Usage Sync schema validation failed: %v", err)
-		return err
+		result.Status = "error"
+		result.ErrorMessage = sanitizeSyncError(err)
+		return result, err
 	}
 
 	if err := ensureAnalyticsStore(ctx, store); err != nil {
-		return err
+		result.Status = "error"
+		result.ErrorMessage = sanitizeSyncError(err)
+		return result, err
 	}
-	projectCount, err := syncProjects(ctx, source, store)
+	projectCount, err := syncProjects(ctx, source, store, &result)
 	if err != nil {
-		return err
+		result.Status = "error"
+		result.ErrorMessage = sanitizeSyncError(err)
+		return result, err
 	}
 	log.Printf("synced OpenCode Projects count=%d", projectCount)
 
-	agentSessionCount, err := syncAgentSessions(ctx, source, store)
+	agentSessionCount, err := syncAgentSessions(ctx, source, store, &result)
 	if err != nil {
-		return err
+		result.Status = "error"
+		result.ErrorMessage = sanitizeSyncError(err)
+		return result, err
 	}
 	log.Printf("synced OpenCode Agent Sessions count=%d", agentSessionCount)
 
-	modelCallCount, err := syncModelCalls(ctx, source, store)
+	modelCallCount, err := syncModelCalls(ctx, source, store, &result)
 	if err != nil {
-		return err
+		result.Status = "error"
+		result.ErrorMessage = sanitizeSyncError(err)
+		return result, err
 	}
 	log.Printf("synced OpenCode Model Calls count=%d", modelCallCount)
 	log.Printf("finished OpenCode Usage Sync source=%q analytics_store=%q", sourcePath, storePath)
-	return nil
+	return result, nil
+}
+
+func RecentSyncRuns(ctx context.Context, storePath string, limit int) ([]SyncResult, error) {
+	if _, err := os.Stat(storePath); errors.Is(err, os.ErrNotExist) {
+		return []SyncResult{}, nil
+	} else if err != nil {
+		return nil, err
+	}
+	store, err := openAnalyticsStore(storePath)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	if err := ensureAnalyticsStore(ctx, store); err != nil {
+		return nil, err
+	}
+	rows, err := store.QueryContext(ctx, `select status, started_at, finished_at, inserted_count, updated_count, skipped_count, coalesce(error_message, '') from sync_runs order by id desc limit ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	runs := []SyncResult{}
+	for rows.Next() {
+		var run SyncResult
+		if err := rows.Scan(&run.Status, &run.StartedAt, &run.FinishedAt, &run.Inserted, &run.Updated, &run.Skipped, &run.ErrorMessage); err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
+}
+
+func openAnalyticsStore(storePath string) (*sql.DB, error) {
+	if dir := filepath.Dir(storePath); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	return sql.Open("sqlite", storePath)
 }
 
 func ValidateOpenCodeSchema(ctx context.Context, db *sql.DB) error {
-	for table, requiredColumns := range requiredOpenCodeSchema {
-		columns, err := tableColumns(ctx, db, table)
+	for _, required := range requiredOpenCodeSchema {
+		columns, err := tableColumns(ctx, db, required.table)
 		if err != nil {
 			return err
 		}
 		if len(columns) == 0 {
-			return UnsupportedOpenCodeSchemaError{Missing: "table " + table}
+			return UnsupportedOpenCodeSchemaError{Missing: "table " + required.table}
 		}
-		for _, column := range requiredColumns {
+		for _, column := range required.columns {
 			if !columns[column] {
-				return UnsupportedOpenCodeSchemaError{Missing: "column " + table + "." + column}
+				return UnsupportedOpenCodeSchemaError{Missing: "column " + required.table + "." + column}
 			}
 		}
 	}
@@ -244,6 +321,16 @@ func ensureAnalyticsStore(ctx context.Context, db *sql.DB) error {
 			source_updated_at text not null,
 			unique(source, source_id)
 		)`,
+		`create table if not exists sync_runs (
+			id integer primary key,
+			status text not null,
+			started_at text not null,
+			finished_at text not null,
+			inserted_count integer not null,
+			updated_count integer not null,
+			skipped_count integer not null,
+			error_message text
+		)`,
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
@@ -253,7 +340,7 @@ func ensureAnalyticsStore(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func syncProjects(ctx context.Context, source, store *sql.DB) (int, error) {
+func syncProjects(ctx context.Context, source, store *sql.DB, result *SyncResult) (int, error) {
 	rows, err := source.QueryContext(ctx, selectOpenCodeProjectsSQL)
 	if err != nil {
 		return 0, fmt.Errorf("read OpenCode projects: %w", err)
@@ -267,6 +354,7 @@ func syncProjects(ctx context.Context, source, store *sql.DB) (int, error) {
 		if err := rows.Scan(&id, &name, &path, &created, &updated); err != nil {
 			return 0, err
 		}
+		trackChange(ctx, store, result, "projects", id, fmt.Sprint(updated))
 		if _, err := store.ExecContext(
 			ctx,
 			upsertProjectSQL,
@@ -284,7 +372,7 @@ func syncProjects(ctx context.Context, source, store *sql.DB) (int, error) {
 	return count, rows.Err()
 }
 
-func syncAgentSessions(ctx context.Context, source, store *sql.DB) (int, error) {
+func syncAgentSessions(ctx context.Context, source, store *sql.DB, result *SyncResult) (int, error) {
 	rows, err := source.QueryContext(ctx, selectOpenCodeAgentSessionsSQL)
 	if err != nil {
 		return 0, fmt.Errorf("read OpenCode sessions: %w", err)
@@ -303,6 +391,7 @@ func syncAgentSessions(ctx context.Context, source, store *sql.DB) (int, error) 
 		if archived.Valid {
 			status = "archived"
 		}
+		trackChange(ctx, store, result, "agent_sessions", id, fmt.Sprint(updated))
 		if _, err := store.ExecContext(
 			ctx,
 			upsertAgentSessionSQL,
@@ -338,7 +427,7 @@ type messageData struct {
 	} `json:"tokens"`
 }
 
-func syncModelCalls(ctx context.Context, source, store *sql.DB) (int, error) {
+func syncModelCalls(ctx context.Context, source, store *sql.DB, result *SyncResult) (int, error) {
 	rows, err := source.QueryContext(ctx, selectOpenCodeModelCallsSQL)
 	if err != nil {
 		return 0, fmt.Errorf("read OpenCode messages: %w", err)
@@ -361,6 +450,7 @@ func syncModelCalls(ctx context.Context, source, store *sql.DB) (int, error) {
 			continue
 		}
 
+		trackChange(ctx, store, result, "model_calls", id, fmt.Sprint(updated))
 		if _, err := store.ExecContext(
 			ctx,
 			upsertModelCallSQL,
@@ -384,6 +474,41 @@ func syncModelCalls(ctx context.Context, source, store *sql.DB) (int, error) {
 		count++
 	}
 	return count, rows.Err()
+}
+
+func trackChange(ctx context.Context, store *sql.DB, result *SyncResult, table, sourceID, sourceUpdatedAt string) {
+	var existing string
+	err := store.QueryRowContext(ctx, `select source_updated_at from `+table+` where source = ? and source_id = ?`, openCodeSource, sourceID).Scan(&existing)
+	if err == sql.ErrNoRows {
+		result.Inserted++
+		return
+	}
+	if err != nil {
+		return
+	}
+	if existing == sourceUpdatedAt {
+		result.Skipped++
+		return
+	}
+	result.Updated++
+}
+
+func recordSyncRun(ctx context.Context, store *sql.DB, result *SyncResult) {
+	if result.FinishedAt == "" {
+		result.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	_, _ = store.ExecContext(ctx, `insert into sync_runs (status, started_at, finished_at, inserted_count, updated_count, skipped_count, error_message) values (?, ?, ?, ?, ?, ?, ?)`, result.Status, result.StartedAt, result.FinishedAt, result.Inserted, result.Updated, result.Skipped, result.ErrorMessage)
+}
+
+func sanitizeSyncError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := err.Error()
+	if strings.Contains(message, "unsupported OpenCode schema") {
+		return message
+	}
+	return "Usage Sync failed. Check that the configured OpenCode database is available."
 }
 
 func messageHasUsage(message messageData) bool {

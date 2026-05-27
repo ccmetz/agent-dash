@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/ccmetz/agent-dash/backend/internal/config"
 	"github.com/ccmetz/agent-dash/backend/internal/usage"
@@ -16,6 +17,7 @@ import (
 func NewServer() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", statusHandler)
+	mux.HandleFunc("POST /api/usage-sync", syncHandler)
 	return mux
 }
 
@@ -23,6 +25,7 @@ type statusResponse struct {
 	OK                 bool                `json:"ok"`
 	AnalyticsStorePath string              `json:"analyticsStorePath"`
 	UsageSource        usageSourceResponse `json:"usageSource"`
+	UsageSync          usageSyncResponse   `json:"usageSync"`
 }
 
 type usageSourceResponse struct {
@@ -32,6 +35,14 @@ type usageSourceResponse struct {
 	State     string `json:"state"`
 }
 
+type usageSyncResponse struct {
+	Status      string             `json:"status"`
+	LastRun     *usage.SyncResult  `json:"lastRun,omitempty"`
+	RecentRuns  []usage.SyncResult `json:"recentRuns"`
+	NextPollAt  string             `json:"nextPollAt"`
+	PollSeconds int                `json:"pollSeconds"`
+}
+
 func statusHandler(w http.ResponseWriter, r *http.Request) {
 	config, err := config.Load()
 	if err != nil {
@@ -39,12 +50,37 @@ func statusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	runs, _ := usage.RecentSyncRuns(r.Context(), config.AnalyticsStorePath, 5)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(statusResponse{
 		OK:                 true,
 		AnalyticsStorePath: config.AnalyticsStorePath,
 		UsageSource:        openCodeUsageSourceStatus(config.OpenCodeDatabasePath),
+		UsageSync:          syncStatus(runs),
 	})
+}
+
+func syncHandler(w http.ResponseWriter, r *http.Request) {
+	config, err := config.Load()
+	if err != nil {
+		http.Error(w, "failed to load config", http.StatusInternalServerError)
+		return
+	}
+	result, syncErr := usage.SyncOpenCode(r.Context(), config.OpenCodeDatabasePath, config.AnalyticsStorePath)
+	w.Header().Set("Content-Type", "application/json")
+	if syncErr != nil {
+		w.WriteHeader(http.StatusBadGateway)
+	}
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+func syncStatus(runs []usage.SyncResult) usageSyncResponse {
+	response := usageSyncResponse{Status: "never_synced", RecentRuns: runs, PollSeconds: 60, NextPollAt: time.Now().UTC().Add(60 * time.Second).Format(time.RFC3339)}
+	if len(runs) > 0 {
+		response.LastRun = &runs[0]
+		response.Status = runs[0].Status
+	}
+	return response
 }
 
 func openCodeUsageSourceStatus(path string) usageSourceResponse {

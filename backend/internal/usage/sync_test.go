@@ -65,7 +65,7 @@ func TestOpenCodeUsageSyncStoresProjectsAgentSessionsAndModelCalls(t *testing.T)
 	storePath := filepath.Join(t.TempDir(), "analytics.db")
 	createOpenCodeFixture(t, sourcePath)
 
-	if err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
+	if _, err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
 		t.Fatalf("expected Usage Sync to succeed: %v", err)
 	}
 
@@ -105,10 +105,10 @@ func TestOpenCodeUsageSyncUpsertsRepeatedSyncsAndChangedSourceRecords(t *testing
 	storePath := filepath.Join(t.TempDir(), "analytics.db")
 	createOpenCodeFixture(t, sourcePath)
 
-	if err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
+	if _, err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
 		t.Fatalf("expected initial Usage Sync to succeed: %v", err)
 	}
-	if err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
+	if _, err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
 		t.Fatalf("expected repeated Usage Sync to succeed: %v", err)
 	}
 
@@ -122,7 +122,7 @@ func TestOpenCodeUsageSyncUpsertsRepeatedSyncsAndChangedSourceRecords(t *testing
 	execSQL(t, source, `update session set title = 'Updated usage sync', time_updated = 7000 where id = 'ses_1'`)
 	execSQL(t, source, `update message set time_updated = 8000, data = '{"role":"assistant","modelID":"claude-sonnet-4-5","providerID":"opencode","cost":0.5,"tokens":{"input":11,"output":21,"reasoning":4,"cache":{"read":5,"write":6}},"finish":"tool-calls"}' where id = 'msg_1'`)
 
-	if err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
+	if _, err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
 		t.Fatalf("expected changed source Usage Sync to succeed: %v", err)
 	}
 	assertCount(t, store, "agent_sessions", 1)
@@ -146,6 +146,69 @@ func TestOpenCodeUsageSyncUpsertsRepeatedSyncsAndChangedSourceRecords(t *testing
 	}
 }
 
+func TestOpenCodeUsageSyncPersistsRunHistoryWithCountsAndSanitizedErrors(t *testing.T) {
+	ctx := context.Background()
+	sourcePath := filepath.Join(t.TempDir(), "opencode.db")
+	storePath := filepath.Join(t.TempDir(), "analytics.db")
+	createOpenCodeFixture(t, sourcePath)
+
+	first, err := SyncOpenCode(ctx, sourcePath, storePath)
+	if err != nil {
+		t.Fatalf("expected initial Usage Sync to succeed: %v", err)
+	}
+	if first.Inserted != 3 || first.Updated != 0 || first.Skipped != 0 || first.Status != "success" {
+		t.Fatalf("expected inserted run counts, got %+v", first)
+	}
+
+	second, err := SyncOpenCode(ctx, sourcePath, storePath)
+	if err != nil {
+		t.Fatalf("expected repeated Usage Sync to succeed: %v", err)
+	}
+	if second.Inserted != 0 || second.Updated != 0 || second.Skipped != 3 {
+		t.Fatalf("expected skipped run counts, got %+v", second)
+	}
+
+	missingSourcePath := filepath.Join(t.TempDir(), "secret", "missing-opencode.db")
+	failed, err := SyncOpenCode(ctx, missingSourcePath, storePath)
+	if err == nil {
+		t.Fatalf("expected missing Usage Source sync to fail")
+	}
+	if failed.Status != "error" || failed.ErrorMessage == "" || failed.ErrorMessage == err.Error() {
+		t.Fatalf("expected sanitized sync error, got result=%+v err=%v", failed, err)
+	}
+
+	runs, err := RecentSyncRuns(ctx, storePath, 3)
+	if err != nil {
+		t.Fatalf("expected recent sync runs: %v", err)
+	}
+	if len(runs) != 3 || runs[0].Status != "error" || runs[1].Skipped != 3 || runs[2].Inserted != 3 {
+		t.Fatalf("expected persisted sync run history, got %+v", runs)
+	}
+}
+
+func TestOpenCodeUsageSyncCreatesAnalyticsStoreParentDirectory(t *testing.T) {
+	ctx := context.Background()
+	sourcePath := filepath.Join(t.TempDir(), "opencode.db")
+	storePath := filepath.Join(t.TempDir(), "missing-data-dir", "analytics.db")
+	createOpenCodeFixture(t, sourcePath)
+
+	result, err := SyncOpenCode(ctx, sourcePath, storePath)
+	if err != nil {
+		t.Fatalf("expected Usage Sync to create Analytics Store parent directory: %v", err)
+	}
+	if result.Status != "success" || result.Inserted != 3 {
+		t.Fatalf("expected successful sync into new Analytics Store path, got %+v", result)
+	}
+
+	runs, err := RecentSyncRuns(ctx, storePath, 1)
+	if err != nil {
+		t.Fatalf("expected sync history from created Analytics Store: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Status != "success" {
+		t.Fatalf("expected persisted successful sync run, got %+v", runs)
+	}
+}
+
 func TestOpenCodeUsageSyncIncludesFailedAndAbortedModelCallsWithUsage(t *testing.T) {
 	ctx := context.Background()
 	sourcePath := filepath.Join(t.TempDir(), "opencode.db")
@@ -158,7 +221,7 @@ func TestOpenCodeUsageSyncIncludesFailedAndAbortedModelCallsWithUsage(t *testing
 	execSQL(t, source, `insert into message (id, session_id, time_created, time_updated, data) values ('msg_aborted', 'ses_1', 8000, 8000, '{"role":"assistant","modelID":"claude-opus-4-5","providerID":"opencode","cost":0.1,"tokens":{"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}},"finish":"abort"}')`)
 	execSQL(t, source, `insert into message (id, session_id, time_created, time_updated, data) values ('msg_empty_error', 'ses_1', 9000, 9000, '{"role":"assistant","modelID":"claude-opus-4-5","providerID":"opencode","finish":"error"}')`)
 
-	if err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
+	if _, err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
 		t.Fatalf("expected Usage Sync to succeed: %v", err)
 	}
 
@@ -179,7 +242,7 @@ func TestOpenCodeUsageSyncStoresMetadataOnly(t *testing.T) {
 	execSQL(t, source, `insert into account (id, email, access_token, refresh_token) values ('acct_1', 'secret@example.com', 'access-secret', 'refresh-secret')`)
 	execSQL(t, source, `update message set data = '{"role":"assistant","modelID":"claude-opus-4-5","providerID":"opencode","cost":0.25,"tokens":{"input":10,"output":20,"reasoning":3,"cache":{"read":4,"write":5}},"finish":"stop","text":"assistant response secret","parts":[{"type":"tool","input":"tool input secret","output":"tool output secret"}],"path":{"cwd":"/work/agent-dash"}}' where id = 'msg_1'`)
 
-	if err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
+	if _, err := SyncOpenCode(ctx, sourcePath, storePath); err != nil {
 		t.Fatalf("expected Usage Sync to succeed: %v", err)
 	}
 
