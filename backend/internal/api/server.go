@@ -1,12 +1,16 @@
 package api
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 
 	"github.com/ccmetz/agent-dash/backend/internal/config"
+	"github.com/ccmetz/agent-dash/backend/internal/usage"
+	_ "modernc.org/sqlite"
 )
 
 func NewServer() http.Handler {
@@ -54,9 +58,29 @@ func openCodeUsageSourceStatus(path string) usageSourceResponse {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		usageSource.Available = false
 		usageSource.State = "missing"
+		return usageSource
 	} else if err != nil {
 		usageSource.Available = false
 		usageSource.State = "unavailable"
+		return usageSource
+	}
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		usageSource.Available = false
+		usageSource.State = "unavailable"
+		return usageSource
+	}
+	defer db.Close()
+
+	if err := usage.ValidateOpenCodeSchema(context.Background(), db); err != nil {
+		var schemaErr usage.UnsupportedOpenCodeSchemaError
+		usageSource.Available = false
+		if errors.As(err, &schemaErr) {
+			usageSource.State = "unsupported_schema"
+		} else {
+			usageSource.State = "unavailable"
+		}
 	}
 
 	return usageSource

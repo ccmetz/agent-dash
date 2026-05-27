@@ -12,6 +12,20 @@ import (
 
 const openCodeSource = "opencode"
 
+var requiredOpenCodeSchema = map[string][]string{
+	"project": {"id", "worktree", "name", "time_created", "time_updated"},
+	"session": {"id", "project_id", "title", "time_created", "time_updated", "time_archived"},
+	"message": {"id", "session_id", "time_created", "time_updated", "data"},
+}
+
+type UnsupportedOpenCodeSchemaError struct {
+	Missing string
+}
+
+func (err UnsupportedOpenCodeSchemaError) Error() string {
+	return "unsupported OpenCode schema: missing " + err.Missing
+}
+
 const selectOpenCodeProjectsSQL = `
 	select
 		id,
@@ -124,6 +138,11 @@ func SyncOpenCode(ctx context.Context, sourcePath, storePath string) error {
 	}
 	defer store.Close()
 
+	if err := ValidateOpenCodeSchema(ctx, source); err != nil {
+		log.Printf("OpenCode Usage Sync schema validation failed: %v", err)
+		return err
+	}
+
 	if err := ensureAnalyticsStore(ctx, store); err != nil {
 		return err
 	}
@@ -146,6 +165,42 @@ func SyncOpenCode(ctx context.Context, sourcePath, storePath string) error {
 	log.Printf("synced OpenCode Model Calls count=%d", modelCallCount)
 	log.Printf("finished OpenCode Usage Sync source=%q analytics_store=%q", sourcePath, storePath)
 	return nil
+}
+
+func ValidateOpenCodeSchema(ctx context.Context, db *sql.DB) error {
+	for table, requiredColumns := range requiredOpenCodeSchema {
+		columns, err := tableColumns(ctx, db, table)
+		if err != nil {
+			return err
+		}
+		if len(columns) == 0 {
+			return UnsupportedOpenCodeSchemaError{Missing: "table " + table}
+		}
+		for _, column := range requiredColumns {
+			if !columns[column] {
+				return UnsupportedOpenCodeSchemaError{Missing: "column " + table + "." + column}
+			}
+		}
+	}
+	return nil
+}
+
+func tableColumns(ctx context.Context, db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.QueryContext(ctx, `select name from pragma_table_info(?)`, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	columns := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		columns[name] = true
+	}
+	return columns, rows.Err()
 }
 
 func ensureAnalyticsStore(ctx context.Context, db *sql.DB) error {

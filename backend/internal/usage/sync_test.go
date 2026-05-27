@@ -3,11 +3,61 @@ package usage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
+
+func TestValidateOpenCodeSchemaAcceptsRequiredMetadataTablesAndColumns(t *testing.T) {
+	ctx := context.Background()
+	sourcePath := filepath.Join(t.TempDir(), "opencode.db")
+	createOpenCodeFixture(t, sourcePath)
+
+	source := openDB(t, sourcePath)
+	defer source.Close()
+
+	if err := ValidateOpenCodeSchema(ctx, source); err != nil {
+		t.Fatalf("expected OpenCode schema to be supported: %v", err)
+	}
+}
+
+func TestValidateOpenCodeSchemaReportsUnsupportedSchemaForMissingRequiredTable(t *testing.T) {
+	ctx := context.Background()
+	sourcePath := filepath.Join(t.TempDir(), "opencode.db")
+	source := openDB(t, sourcePath)
+	defer source.Close()
+	execSQL(t, source, `create table project (id text primary key, worktree text not null, name text, time_created integer not null, time_updated integer not null)`)
+
+	err := ValidateOpenCodeSchema(ctx, source)
+	var schemaErr UnsupportedOpenCodeSchemaError
+	if !errors.As(err, &schemaErr) {
+		t.Fatalf("expected unsupported OpenCode schema error, got %v", err)
+	}
+	if schemaErr.Missing != "table session" {
+		t.Fatalf("expected missing session table, got %q", schemaErr.Missing)
+	}
+}
+
+func TestValidateOpenCodeSchemaReportsUnsupportedSchemaForMissingRequiredColumn(t *testing.T) {
+	ctx := context.Background()
+	sourcePath := filepath.Join(t.TempDir(), "opencode.db")
+	source := openDB(t, sourcePath)
+	defer source.Close()
+	execSQL(t, source, `create table project (id text primary key, name text, time_created integer not null, time_updated integer not null)`)
+	execSQL(t, source, `create table session (id text primary key, project_id text not null, title text not null, time_created integer not null, time_updated integer not null, time_archived integer)`)
+	execSQL(t, source, `create table message (id text primary key, session_id text not null, time_created integer not null, time_updated integer not null, data text not null)`)
+
+	err := ValidateOpenCodeSchema(ctx, source)
+	var schemaErr UnsupportedOpenCodeSchemaError
+	if !errors.As(err, &schemaErr) {
+		t.Fatalf("expected unsupported OpenCode schema error, got %v", err)
+	}
+	if schemaErr.Missing != "column project.worktree" {
+		t.Fatalf("expected missing project.worktree column, got %q", schemaErr.Missing)
+	}
+}
 
 func TestOpenCodeUsageSyncStoresProjectsAgentSessionsAndModelCalls(t *testing.T) {
 	ctx := context.Background()
