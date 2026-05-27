@@ -32,3 +32,8 @@
     var(--color-app-shell-deep)
   );
 }
+
+html,
+body {
+  background-color: var(--color-app-shell-deep);
+}
