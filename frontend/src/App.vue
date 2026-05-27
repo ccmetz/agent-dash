@@ -1,13 +1,23 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import PanelCard from './ui/PanelCard.vue';
+import StatusItem from './ui/StatusItem.vue';
 
 type Status = {
   ok: boolean;
   analyticsStorePath: string;
+  usageSource?: {
+    name: string;
+    path: string;
+    available: boolean;
+    state: string;
+  };
 };
 
 const status = ref<Status | null>(null);
 const error = ref(false);
+
+const waitingMessage = 'Waiting for backend status...';
 
 onMounted(async () => {
   try {
@@ -20,6 +30,18 @@ onMounted(async () => {
     error.value = true;
   }
 });
+
+function backendStatus() {
+  if (status.value?.ok) return 'connected';
+  if (error.value) return 'disconnected';
+  return 'connecting';
+}
+
+function usageSourceStatus() {
+  if (status.value?.usageSource?.available) return 'connected';
+  if (status.value?.usageSource?.state === 'missing' || error.value) return 'disconnected';
+  return 'connecting';
+}
 </script>
 
 <template>
@@ -32,34 +54,37 @@ onMounted(async () => {
       </p>
     </section>
 
-    <section
-      class="border-panel-border bg-panel shadow-panel rounded-panel mt-14 w-full max-w-lg space-y-4 border p-6 sm:p-8"
-      aria-label="Backend status"
+    <PanelCard
+      v-if="status?.usageSource?.state === 'missing'"
+      class="mt-10 space-y-4"
+      aria-label="Usage Source setup"
     >
-      <span
-        v-if="status?.ok"
-        class="bg-status-success text-status-success-fg inline-flex rounded-full px-3 py-1.5 font-bold"
-      >
-        Connected
-      </span>
-      <span
-        v-else-if="error"
-        class="bg-status-danger text-status-danger-fg inline-flex rounded-full px-3 py-1.5 font-bold"
-      >
-        Disconnected
-      </span>
-      <span
-        v-else
-        class="bg-status-neutral text-status-neutral-fg inline-flex rounded-full px-3 py-1.5 font-bold"
-      >
-        Connecting
-      </span>
-      <p class="text-app-accent pt-2 text-xs font-bold tracking-[0.12em] uppercase">
-        Analytics Store
+      <p class="text-app-accent text-xs font-bold tracking-[0.12em] uppercase">Setup needed</p>
+      <h2 class="text-app-fg-strong m-0 text-2xl font-bold">OpenCode Usage Source missing</h2>
+      <p class="text-app-muted m-0 max-w-xl text-lg leading-7">
+        Agent Dash could not find OpenCode's local database, so there is no Usage Metadata to show
+        yet.
       </p>
-      <p class="text-app-fg-strong m-0 wrap-anywhere font-mono">
-        {{ status?.analyticsStorePath ?? 'Waiting for backend status...' }}
+      <p class="text-app-fg-strong m-0 font-bold">
+        Open OpenCode once, then refresh this dashboard.
       </p>
-    </section>
+      <p class="text-app-muted m-0">Checked path:</p>
+      <p class="text-app-fg-strong m-0 wrap-anywhere font-mono">{{ status.usageSource.path }}</p>
+    </PanelCard>
+
+    <PanelCard class="mt-14 divide-y divide-panel-border" aria-label="Backend status">
+      <StatusItem
+        class="pb-6"
+        label="Analytics Store"
+        :status="backendStatus()"
+        :value="status?.analyticsStorePath ?? waitingMessage"
+      />
+      <StatusItem
+        class="pt-6"
+        label="OpenCode Usage Source"
+        :status="usageSourceStatus()"
+        :value="status?.usageSource?.path ?? waitingMessage"
+      />
+    </PanelCard>
   </main>
 </template>

@@ -1,3 +1,4 @@
 {
-  "analyticsStorePath": "data/agent-dash.sqlite"
+  "analyticsStorePath": "data/agent-dash.sqlite",
+  "openCodeDatabasePath": "/Users/you/.local/share/opencode/opencode.db"
 }
