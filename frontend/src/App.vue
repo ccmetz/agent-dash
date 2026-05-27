@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import ActionButton from './ui/ActionButton.vue';
 import PanelCard from './ui/PanelCard.vue';
 import StatusItem from './ui/StatusItem.vue';
 
@@ -140,14 +141,9 @@ function formatSyncCounts(run?: SyncRun) {
           :status="syncStatus()"
           :value="syncing ? 'Sync in progress...' : formatSyncCounts(lastRun)"
         />
-        <button
-          class="border-app-accent/70 bg-app-shell/40 text-app-fg-strong hover:border-app-fg-strong hover:bg-app-accent/15 focus-visible:ring-app-accent cursor-pointer rounded-lg border px-4 py-2 text-sm font-bold shadow-sm shadow-black/20 transition hover:-translate-y-0.5 hover:shadow-md focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-app-shell focus-visible:outline-none active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:border-app-accent/70 disabled:hover:bg-app-shell/40 disabled:hover:shadow-sm"
-          type="button"
-          :disabled="syncing"
-          @click="runManualSync"
-        >
+        <ActionButton :disabled="syncing" @click="runManualSync">
           {{ syncing ? 'Syncing...' : 'Refresh Usage' }}
-        </button>
+        </ActionButton>
       </div>
       <dl class="text-app-muted grid gap-3 text-sm sm:grid-cols-2">
         <div>
