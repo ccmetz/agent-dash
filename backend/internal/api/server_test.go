@@ -175,6 +175,61 @@ func TestStatusReportsMissingOpenCodeUsageSourceWithoutFailing(t *testing.T) {
 	}
 }
 
+func TestManualUsageSyncEndpointSyncsOpenCodeUsageAndStatusShowsLastRun(t *testing.T) {
+	dir := t.TempDir()
+	usageSourcePath := filepath.Join(dir, "opencode.db")
+	storePath := filepath.Join(dir, "analytics.db")
+	createSupportedOpenCodeDatabase(t, usageSourcePath)
+	db := openSQLite(t, usageSourcePath)
+	execSQL(t, db, `insert into project (id, worktree, name, time_created, time_updated) values ('proj_1', '/work/agent-dash', 'Agent Dash', 1000, 2000)`)
+	execSQL(t, db, `insert into session (id, project_id, title, time_created, time_updated, time_archived) values ('ses_1', 'proj_1', 'Manual sync', 3000, 4000, null)`)
+	execSQL(t, db, `insert into message (id, session_id, time_created, time_updated, data) values ('msg_1', 'ses_1', 5000, 6000, '{"role":"assistant","modelID":"claude-opus-4-5","providerID":"opencode","cost":0.25,"tokens":{"input":10,"output":20,"reasoning":3,"cache":{"read":4,"write":5}},"finish":"stop"}')`)
+	db.Close()
+	configPath := filepath.Join(dir, "local.json")
+	if err := os.WriteFile(configPath, []byte(`{"openCodeDatabasePath":"`+usageSourcePath+`","analyticsStorePath":"`+storePath+`"}`), 0o600); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+	t.Setenv("AGENT_DASH_CONFIG", configPath)
+
+	request := httptest.NewRequest(http.MethodPost, "/api/usage-sync", nil)
+	response := httptest.NewRecorder()
+	NewServer().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected manual sync status 200, got %d", response.Code)
+	}
+	var syncBody struct {
+		Status   string `json:"status"`
+		Inserted int    `json:"inserted"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&syncBody); err != nil {
+		t.Fatalf("expected manual sync JSON response: %v", err)
+	}
+	if syncBody.Status != "success" || syncBody.Inserted != 3 {
+		t.Fatalf("expected successful manual sync counts, got %+v", syncBody)
+	}
+
+	statusRequest := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	statusResponse := httptest.NewRecorder()
+	NewServer().ServeHTTP(statusResponse, statusRequest)
+	var statusBody struct {
+		UsageSync struct {
+			Status  string `json:"status"`
+			LastRun *struct {
+				Inserted int `json:"inserted"`
+			} `json:"lastRun"`
+			PollSeconds int    `json:"pollSeconds"`
+			NextPollAt  string `json:"nextPollAt"`
+		} `json:"usageSync"`
+	}
+	if err := json.NewDecoder(statusResponse.Body).Decode(&statusBody); err != nil {
+		t.Fatalf("expected status JSON response: %v", err)
+	}
+	if statusBody.UsageSync.Status != "success" || statusBody.UsageSync.LastRun.Inserted != 3 || statusBody.UsageSync.PollSeconds != 60 || statusBody.UsageSync.NextPollAt == "" {
+		t.Fatalf("expected status sync diagnostics, got %+v", statusBody.UsageSync)
+	}
+}
+
 func createSupportedOpenCodeDatabase(t *testing.T, path string) {
 	t.Helper()
 	db := openSQLite(t, path)
