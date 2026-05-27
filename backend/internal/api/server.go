@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/ccmetz/agent-dash/backend/internal/config"
@@ -18,6 +19,7 @@ func NewServer() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", statusHandler)
 	mux.HandleFunc("POST /api/usage-sync", syncHandler)
+	mux.HandleFunc("GET /api/usage-overview", usageOverviewHandler)
 	return mux
 }
 
@@ -72,6 +74,39 @@ func syncHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+func usageOverviewHandler(w http.ResponseWriter, r *http.Request) {
+	config, err := config.Load()
+	if err != nil {
+		http.Error(w, "failed to load config", http.StatusInternalServerError)
+		return
+	}
+	days := 30
+	if value := r.URL.Query().Get("days"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			http.Error(w, "invalid days", http.StatusBadRequest)
+			return
+		}
+		days = parsed
+	}
+	end := time.Now().UTC()
+	if value := r.URL.Query().Get("end"); value != "" {
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			http.Error(w, "invalid end", http.StatusBadRequest)
+			return
+		}
+		end = parsed
+	}
+	overview, err := usage.UsageOverview(r.Context(), config.AnalyticsStorePath, days, end)
+	if err != nil {
+		http.Error(w, "failed to load usage overview", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(overview)
 }
 
 func syncStatus(runs []usage.SyncResult) usageSyncResponse {

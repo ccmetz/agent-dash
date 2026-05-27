@@ -141,6 +141,145 @@ describe('Usage Overview shell', () => {
     expect(fetch).toHaveBeenCalledWith('/api/usage-sync', { method: 'POST' });
   });
 
+  it('loads the last 30 days Usage Overview with cards and daily charts', async () => {
+    const fetch = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      async (url, init) => {
+        if (url === '/api/usage-sync' && init?.method === 'POST') {
+          return new Response(
+            JSON.stringify({ status: 'success', inserted: 0, updated: 0, skipped: 0 }),
+            {
+              headers: { 'Content-Type': 'application/json' },
+            },
+          );
+        }
+        if (url === '/api/usage-overview?days=30') {
+          return new Response(
+            JSON.stringify({
+              range: { days: 30, start: '2024-01-02T00:00:00Z', end: '2024-02-01T00:00:00Z' },
+              totals: {
+                tokens: {
+                  total: 900,
+                  input: 300,
+                  output: 400,
+                  reasoning: 100,
+                  cacheRead: 50,
+                  cacheWrite: 50,
+                },
+                actualCost: 1.25,
+                agentSessions: 2,
+                modelCalls: 3,
+              },
+              daily: [
+                { date: '2024-01-31', tokens: 300, actualCost: 0.5 },
+                { date: '2024-02-01', tokens: 600, actualCost: 0.75 },
+              ],
+            }),
+            { headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            analyticsStorePath: 'data/agent-dash.sqlite',
+            usageSource: {
+              name: 'OpenCode',
+              path: '/opencode.db',
+              available: true,
+              state: 'available',
+            },
+            usageSync: {
+              status: 'success',
+              pollSeconds: 60,
+              nextPollAt: '2026-01-01T00:01:00Z',
+              recentRuns: [],
+            },
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        );
+      },
+    );
+    vi.stubGlobal('fetch', fetch);
+
+    render(App);
+
+    expect(await screen.findByText('Last 30 days')).toBeTruthy();
+    expect(await screen.findByText('900')).toBeTruthy();
+    expect(await screen.findByText('$1.25')).toBeTruthy();
+    expect(await screen.findByText('2')).toBeTruthy();
+    expect(await screen.findByText('3')).toBeTruthy();
+    expect(await screen.findByText('Daily Tokens')).toBeTruthy();
+    expect(await screen.findByText('Daily Actual Cost')).toBeTruthy();
+    expect(await screen.findByText('2024-02-01: 600 tokens')).toBeTruthy();
+    expect(await screen.findByText('2024-02-01: $0.75')).toBeTruthy();
+    expect(fetch).toHaveBeenCalledWith('/api/usage-overview?days=30');
+  });
+
+  it('shows Usage Overview loading and empty chart states', async () => {
+    let finishOverview: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<(url: string, init?: RequestInit) => Promise<Response>>((url, init) => {
+        if (url === '/api/usage-sync' && init?.method === 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ status: 'success', inserted: 0, updated: 0, skipped: 0 }),
+              {
+                headers: { 'Content-Type': 'application/json' },
+              },
+            ),
+          );
+        }
+        if (url === '/api/usage-overview?days=30') {
+          return new Promise<Response>((resolve) => {
+            finishOverview = resolve;
+          });
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ok: true,
+              analyticsStorePath: 'data/agent-dash.sqlite',
+              usageSource: {
+                name: 'OpenCode',
+                path: '/opencode.db',
+                available: true,
+                state: 'available',
+              },
+              usageSync: {
+                status: 'success',
+                pollSeconds: 60,
+                nextPollAt: '2026-01-01T00:01:00Z',
+                recentRuns: [],
+              },
+            }),
+            { headers: { 'Content-Type': 'application/json' } },
+          ),
+        );
+      }),
+    );
+
+    render(App);
+
+    expect(await screen.findByText('Loading Usage Overview...')).toBeTruthy();
+    finishOverview(
+      new Response(
+        JSON.stringify({
+          range: { days: 30, start: '2024-01-02T00:00:00Z', end: '2024-02-01T00:00:00Z' },
+          totals: {
+            tokens: { total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+            actualCost: 0,
+            agentSessions: 0,
+            modelCalls: 0,
+          },
+          daily: [],
+        }),
+        { headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    expect(await screen.findByText('No daily token data yet.')).toBeTruthy();
+    expect(await screen.findByText('No daily Actual Cost data yet.')).toBeTruthy();
+  });
+
   it('starts a Usage Sync when the dashboard opens', async () => {
     let synced = false;
     const fetch = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
